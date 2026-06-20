@@ -5,6 +5,8 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
+df = yf.download(ticker, start=start_date, end=end_date)
+
 # Page config
 st.set_page_config(
     page_title="AI 종목별 주식 예측 대시보드",
