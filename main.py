@@ -160,8 +160,76 @@ if st.button("🔍 상승 유망 종목 분석 시작", type="primary"):
             )
             
             st.info("💡 팁: 'AI 분석 시그널'에 '골든크로스'나 '반등 중'이 뜬 종목들의 차트를 기존 대시보드 탭에 입력하여 자세히 분석해 보세요.")
+
         else:
             st.warning("분석 가능한 종목 데이터를 가져오지 못했습니다.")
 
 else:
     st.info("👆 위 버튼을 눌러 시가총액 상위 종목들의 현재 상승 잠재력을 스캔해 보세요!")
+
+
+downloader_code = """import streamlit as st
+import yfinance as yf
+import pandas as pd
+from datetime import datetime
+
+# Page config
+st.set_page_config(
+    page_title="5년치 주식 데이터 다운로더",
+    page_icon="💾",
+    layout="centered"
+)
+
+st.title("💾 최근 5년치 주식 데이터 다운로더")
+st.markdown(\"\"\"
+원하는 주식 종목의 최근 5년치 과거 데이터(시가, 고가, 저가, 종가, 거래량 등)를 
+클릭 한 번으로 조회하고 **CSV 파일로 다운로드**할 수 있는 도구입니다.
+\"\"\")
+
+# 입력부
+ticker = st.text_input("종목 티커를 입력하세요 (예: 삼성전자 005930.KS, 애플 AAPL)", value="005930.KS")
+
+if st.button("데이터 조회 및 다운로드 준비", type="primary"):
+    with st.spinner("5년치 데이터를 불러오는 중입니다..."):
+        try:
+            # yfinance를 이용해 5년치 데이터(period="5y") 다운로드
+            df = yf.download(ticker, period="5y", progress=False)
+            
+            if df.empty:
+                st.error("데이터를 가져오지 못했습니다. 티커(종목코드)를 다시 확인해 주세요.")
+            else:
+                # 최신 yfinance MultiIndex 오류 평탄화 방어 코드
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                    
+                # 인덱스(날짜) 시간대 정보 제거 (엑셀 호환성 향상)
+                if isinstance(df.index, pd.DatetimeIndex):
+                    df.index = df.index.tz_localize(None)
+                
+                # 데이터 역순 정렬 (최신 날짜가 위로 오게)
+                df = df.sort_index(ascending=False)
+                
+                st.success(f"✅ {ticker} 종목의 5년치 데이터({len(df)} 거래일)를 성공적으로 불러왔습니다!")
+                
+                # 데이터 미리보기
+                st.subheader("데이터 미리보기 (최근 10일)")
+                st.dataframe(df.head(10).style.format("{:.2f}"))
+                
+                # CSV 다운로드 버튼
+                # utf-8-sig 인코딩을 사용해 엑셀에서 한글이 깨지지 않도록 함
+                csv_data = df.to_csv(index=True).encode('utf-8-sig')
+                
+                st.download_button(
+                    label="📥 전체 5년치 데이터 CSV 다운로드",
+                    data=csv_data,
+                    file_name=f"{ticker}_5years_historical_data.csv",
+                    mime="text/csv"
+                )
+                
+        except Exception as e:
+            st.error(f"오류가 발생했습니다: {e}")
+"""
+
+with open("data_downloader.py", "w", encoding="utf-8") as f:
+    f.write(downloader_code)
+print("Data downloader file written successfully.")
