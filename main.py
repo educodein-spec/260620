@@ -5,8 +5,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="한국 주식 AI 예측 (종목명 검색)", page_icon="🔎", layout="wide")
-import pandas as pd
 
 # 엑셀 파일에서 코스피 목록 불러오기
 df_kospi = pd.read_excel('korea_stock_code_list.xlsx', sheet_name='코스피 (KOSPI)')
