@@ -2,234 +2,123 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # Page config
 st.set_page_config(
-    page_title="국내 유망 주식 발굴기",
-    page_icon="🚀",
+    page_title="주식 변동성 및 리스크 분석기",
+    page_icon="🌪️",
     layout="wide"
 )
 
-st.title("🚀 국내 대표 우량주 상승 잠재력 분석기")
+st.title("🌪️ AI 주식 변동성(Volatility) 및 리스크 분석기")
 st.markdown("""
-이 프로그램은 시가총액 상위 주요 국내 주식들의 최근 데이터를 수집하여, 
-**기술적 지표(골든크로스, RSI)**를 바탕으로 단기적으로 상승 잠재력이 있는 종목을 선별해 줍니다.
-* **추천 기준:** 단기 이동평균선이 장기 이동평균선을 상향 돌파하려 하거나, RSI가 과매도 구간에서 반등하는 종목에 높은 점수를 부여합니다.
-* ⚠️ **주의:** 기술적 분석에 기반한 확률적 추정이므로 실제 투자 시에는 기업의 기본적 가치(재무제표) 및 뉴스를 함께 확인해야 합니다.
+이 대시보드는 주식의 **과거 변동성과 볼린저 밴드, ATR 지표**를 분석하여 
+조만간 주가가 크게 요동칠 가능성이 있는지(변동성 확대 국면)를 시각적으로 진단해 줍니다.
 """)
 
-# 국내 주요 주식 리스트 (KOSPI 시총 상위 및 주요 KOSDAQ)
-target_stocks = {
-    '삼성전자': '005930.KS',
-    'SK하이닉스': '000660.KS',
-    'LG에너지솔루션': '373220.KS',
-    '삼성바이오로직스': '207940.KS',
-    '현대차': '005380.KS',
-    '기아': '000270.KS',
-    '셀트리온': '068270.KS',
-    'POSCO홀딩스': '005490.KS',
-    'NAVER': '035420.KS',
-    '카카오': '035720.KS',
-    '에코프로비엠': '247540.KQ',
-    '알테오젠': '196170.KQ'
-}
+# Sidebar
+st.sidebar.header("⚙️ 분석 설정")
+ticker = st.sidebar.text_input("종목 티커 입력 (예: 005930.KS, AAPL, TSLA)", value="TSLA")
+period = st.sidebar.selectbox("데이터 조회 기간", ["6mo", "1y", "2y", "5y"], index=1)
 
-# RSI 계산 함수
-def calculate_rsi(data, periods=14):
-    close_delta = data['Close'].diff()
-    up = close_delta.clip(lower=0)
-    down = -1 * close_delta.clip(upper=0)
-    ma_up = up.ewm(com=periods - 1, adjust=True, min_periods=periods).mean()
-    ma_down = down.ewm(com=periods - 1, adjust=True, min_periods=periods).mean()
-    rsi = ma_up / ma_down
-    rsi = 100 - (100 / (1 + rsi))
-    return rsi
-
-if st.button("🔍 상승 유망 종목 분석 시작", type="primary"):
-    with st.spinner("데이터를 수집하고 알고리즘을 분석 중입니다. 잠시만 기다려주세요..."):
-        
-        end_date = datetime.today()
-        start_date = end_date - timedelta(days=120) # 최근 4개월 데이터
-        
-        results = []
-        
-        # Streamlit 프로그레스 바
-        progress_text = "종목 스캔 중..."
-        my_bar = st.progress(0, text=progress_text)
-        
-        total_stocks = len(target_stocks)
-        
-        for i, (name, ticker) in enumerate(target_stocks.items()):
-            try:
-                # 데이터 다운로드
-                df = yf.download(ticker, start=start_date, end=end_date, progress=False)
-                
-                # MultiIndex 오류 방지
+if st.sidebar.button("변동성 분석 실행", type="primary"):
+    with st.spinner(f"{ticker} 변동성 데이터를 분석 중입니다..."):
+        try:
+            # 1. 데이터 수집
+            df = yf.download(ticker, period=period, progress=False)
+            
+            if df.empty:
+                st.error("데이터를 가져오지 못했습니다. 티커명을 확인해 주세요.")
+            else:
+                # MultiIndex 오류 평탄화 (yfinance 최신버전 대응)
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                
-                if len(df) < 50:
-                    continue
                     
-                # 지표 계산
-                df['MA5'] = df['Close'].rolling(window=5).mean()
+                # 2. 지표 계산
+                # (1) 볼린저 밴드 (20일 기준)
                 df['MA20'] = df['Close'].rolling(window=20).mean()
-                df['MA60'] = df['Close'].rolling(window=60).mean()
-                df['RSI'] = calculate_rsi(df)
+                df['StdDev'] = df['Close'].rolling(window=20).std()
+                df['BB_Upper'] = df['MA20'] + (df['StdDev'] * 2)
+                df['BB_Lower'] = df['MA20'] - (df['StdDev'] * 2)
+                df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 # 밴드폭(%)
                 
-                # 최신 값 추출
+                # (2) 역사적 변동성 (Historical Volatility, 20일 기준 연율화)
+                df['Daily_Return'] = df['Close'].pct_change()
+                df['HV'] = df['Daily_Return'].rolling(window=20).std() * np.sqrt(252) * 100
+                
+                # (3) ATR (Average True Range, 14일 기준) - 하루 평균 움직임 폭
+                df['High-Low'] = df['High'] - df['Low']
+                df['High-PrevClose'] = np.abs(df['High'] - df['Close'].shift(1))
+                df['Low-PrevClose'] = np.abs(df['Low'] - df['Close'].shift(1))
+                df['TR'] = df[['High-Low', 'High-PrevClose', 'Low-PrevClose']].max(axis=1)
+                df['ATR'] = df['TR'].rolling(window=14).mean()
+                
+                # 결측치 제거
+                df = df.dropna()
+                
+                # 3. 최신 데이터 추출
                 latest = df.iloc[-1]
                 prev = df.iloc[-2]
                 
                 current_price = float(latest['Close'])
-                ma5 = float(latest['MA5'])
-                ma20 = float(latest['MA20'])
-                rsi = float(latest['RSI'])
+                current_hv = float(latest['HV'])
+                current_bb_width = float(latest['BB_Width'])
+                current_atr = float(latest['ATR'])
                 
-                # 상승 잠재력 평가 알고리즘 (Scoring)
-                score = 0
-                signal_msg = []
+                currency_symbol = "원" if ".KS" in ticker or ".KQ" in ticker else "$"
+                format_price = lambda x: f"{int(x):,}{currency_symbol}" if currency_symbol == "원" else f"${x:,.2f}"
                 
-                # 1. 이동평균선 정배열 또는 골든크로스 임박
-                if ma5 > ma20:
-                    score += 30
-                    signal_msg.append("단기 상승세(MA5>MA20)")
-                elif prev['MA5'] <= prev['MA20'] and ma5 > ma20:
-                    score += 50
-                    signal_msg.append("🔥골든크로스 발생")
-                elif ma20 > ma5 and (ma20 - ma5) / ma20 < 0.02: # 2% 이내로 좁혀짐
-                    score += 20
-                    signal_msg.append("골든크로스 임박")
-                    
-                # 2. RSI 분석 (과매도 후 반등)
-                if rsi < 30:
-                    score += 10
-                    signal_msg.append("과매도 구간(바닥)")
-                elif 30 <= rsi <= 50 and rsi > float(prev['RSI']):
-                    score += 30
-                    signal_msg.append("바닥 확인 및 반등 중")
-                elif 50 < rsi <= 70:
-                    score += 20
-                    signal_msg.append("안정적 상승세")
+                # 4. 상단 요약 매트릭스
+                st.subheader(f"📊 {ticker} 현재 변동성 진단")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("현재 종가", format_price(current_price))
+                col2.metric("역사적 변동성 (HV)", f"{current_hv:.1f}%", 
+                            help="연간 기준으로 환산한 주가 수익률의 표준편차입니다. 30% 이상이면 고변동성 종목으로 분류됩니다.")
+                
+                # 볼린저 밴드 폭 변화량 계산
+                bb_width_change = current_bb_width - float(prev['BB_Width'])
+                col3.metric("볼린저 밴드 폭 (수축/확장)", f"{current_bb_width:.1f}%", delta=f"{bb_width_change:+.1f}%", delta_color="off",
+                            help="밴드 폭이 좁아질수록 에너지가 응축되어 조만간 큰 변동이 발생할 확률이 높습니다.")
+                
+                col4.metric("하루 평균 변동폭 (ATR)", format_price(current_atr),
+                            help="최근 14일 동안 하루 평균 주가가 고점과 저점 사이에서 얼마만큼 움직였는지 나타냅니다.")
+                
+                # 5. AI 변동성 코멘트
+                st.markdown("### 💡 변동성 시그널 분석")
+                if current_bb_width < df['BB_Width'].quantile(0.2):
+                    st.warning("**⚠️ 볼린저 밴드 수축(Squeeze) 상태:** 밴드 폭이 과거 1년 중 하위 20% 이내로 매우 좁습니다. 에너지가 응축되어 있어 조만간 위든 아래든 **급격한 주가 변동이 발생할 가능성이 매우 높습니다.** 방향성 이탈을 주의 깊게 살피세요.")
+                elif current_bb_width > df['BB_Width'].quantile(0.8):
+                    st.info("**📈 볼린저 밴드 확장 상태:** 주가 변동성이 이미 크게 확대된 상태입니다. 단기 고점이나 저점을 형성한 후 다시 안정화(평균 회귀)될 가능성이 있습니다.")
                 else:
-                    score -= 10
-                    signal_msg.append("과매수 구간(조정 주의)")
-                    
-                results.append({
-                    '종목명': name,
-                    '현재가': f"{int(current_price):,}원",
-                    'RSI 지수': round(rsi, 1),
-                    '상승 잠재력 점수': score,
-                    'AI 분석 시그널': " / ".join(signal_msg)
-                })
+                    st.success("**✅ 정상 변동성 구간:** 주가가 일반적인 변동성 범위 내에서 안정적으로 움직이고 있습니다.")
                 
-            except Exception as e:
-                pass # 에러 발생 종목은 스킵
-            
-            # 진행률 업데이트
-            my_bar.progress((i + 1) / total_stocks, text=f"분석 중: {name}")
-            
-        # 스캔 완료
-        my_bar.empty()
-        st.success("✅ 종목 스캔이 완료되었습니다! 점수가 높은 순으로 정렬된 결과를 확인하세요.")
-        
-        # 결과를 데이터프레임으로 변환 및 정렬
-        if results:
-            result_df = pd.DataFrame(results)
-            result_df = result_df.sort_values(by='상승 잠재력 점수', ascending=False).reset_index(drop=True)
-            
-            # 시각적인 테이블 출력
-            st.dataframe(
-                result_df,
-                column_config={
-                    "상승 잠재력 점수": st.column_config.ProgressColumn(
-                        "상승 잠재력 점수 (100점 만점)",
-                        help="점수가 높을수록 단기 상승 확률이 높다고 평가됩니다.",
-                        format="%d점",
-                        min_value=0,
-                        max_value=100,
-                    ),
-                    "RSI 지수": st.column_config.NumberColumn(
-                        "RSI 지수",
-                        help="30 이하면 과매도(저평가), 70 이상이면 과매수(고평가) 상태입니다."
-                    )
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            st.info("💡 팁: 'AI 분석 시그널'에 '골든크로스'나 '반등 중'이 뜬 종목들의 차트를 기존 대시보드 탭에 입력하여 자세히 분석해 보세요.")
-
-        else:
-            st.warning("분석 가능한 종목 데이터를 가져오지 못했습니다.")
-
-else:
-    st.info("👆 위 버튼을 눌러 시가총액 상위 종목들의 현재 상승 잠재력을 스캔해 보세요!")
-
-
-downloader_code = """import streamlit as st
-import yfinance as yf
-import pandas as pd
-from datetime import datetime
-
-# Page config
-st.set_page_config(
-    page_title="5년치 주식 데이터 다운로더",
-    page_icon="💾",
-    layout="centered"
-)
-
-st.title("💾 최근 5년치 주식 데이터 다운로더")
-st.markdown(\"\"\"
-원하는 주식 종목의 최근 5년치 과거 데이터(시가, 고가, 저가, 종가, 거래량 등)를 
-클릭 한 번으로 조회하고 **CSV 파일로 다운로드**할 수 있는 도구입니다.
-\"\"\")
-
-# 입력부
-ticker = st.text_input("종목 티커를 입력하세요 (예: 삼성전자 005930.KS, 애플 AAPL)", value="005930.KS")
-
-if st.button("데이터 조회 및 다운로드 준비", type="primary"):
-    with st.spinner("5년치 데이터를 불러오는 중입니다..."):
-        try:
-            # yfinance를 이용해 5년치 데이터(period="5y") 다운로드
-            df = yf.download(ticker, period="5y", progress=False)
-            
-            if df.empty:
-                st.error("데이터를 가져오지 못했습니다. 티커(종목코드)를 다시 확인해 주세요.")
-            else:
-                # 최신 yfinance MultiIndex 오류 평탄화 방어 코드
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                    
-                # 인덱스(날짜) 시간대 정보 제거 (엑셀 호환성 향상)
-                if isinstance(df.index, pd.DatetimeIndex):
-                    df.index = df.index.tz_localize(None)
+                # 6. 인터랙티브 차트 (Plotly)
+                st.subheader("📈 주가 및 볼린저 밴드 차트")
                 
-                # 데이터 역순 정렬 (최신 날짜가 위로 오게)
-                df = df.sort_index(ascending=False)
+                fig = go.Figure()
                 
-                st.success(f"✅ {ticker} 종목의 5년치 데이터({len(df)} 거래일)를 성공적으로 불러왔습니다!")
+                # 캔들스틱 차트
+                fig.add_trace(go.Candlestick(x=df.index,
+                                open=df['Open'], high=df['High'],
+                                low=df['Low'], close=df['Close'],
+                                name='캔들스틱'))
                 
-                # 데이터 미리보기
-                st.subheader("데이터 미리보기 (최근 10일)")
-                st.dataframe(df.head(10).style.format("{:.2f}"))
+                # 볼린저 밴드 영역
+                fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='rgba(250, 0, 0, 0.2)'), name='Upper Band'))
+                fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='rgba(0, 0, 250, 0.2)'), fill='tonexty', name='Lower Band'))
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='20일 이평선'))
                 
-                # CSV 다운로드 버튼
-                # utf-8-sig 인코딩을 사용해 엑셀에서 한글이 깨지지 않도록 함
-                csv_data = df.to_csv(index=True).encode('utf-8-sig')
+                fig.update_layout(xaxis_rangeslider_visible=False, height=500, template='plotly_dark')
+                st.plotly_chart(fig, use_container_width=True)
                 
-                st.download_button(
-                    label="📥 전체 5년치 데이터 CSV 다운로드",
-                    data=csv_data,
-                    file_name=f"{ticker}_5years_historical_data.csv",
-                    mime="text/csv"
-                )
-                
+                # 하단 차트: 역사적 변동성 트렌드
+                st.subheader("📉 역사적 변동성(HV) 흐름")
+                st.line_chart(df['HV'], height=200)
+
         except Exception as e:
-            st.error(f"오류가 발생했습니다: {e}")
-"""
-
-with open("data_downloader.py", "w", encoding="utf-8") as f:
-    f.write(downloader_code)
-print("Data downloader file written successfully.")
+            st.error(f"분석 중 오류 발생: {e}")
+else:
+    st.info("← 사이드바에서 티커를 입력하고 버튼을 클릭하세요.")
