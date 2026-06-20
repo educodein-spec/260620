@@ -2,123 +2,109 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# Page config
+# 1. 페이지 기본 설정
 st.set_page_config(
-    page_title="주식 변동성 및 리스크 분석기",
-    page_icon="🌪️",
+    page_title="한국 주식 AI 예측 대시보드",
+    page_icon="📈",
     layout="wide"
 )
 
-st.title("🌪️ AI 주식 변동성(Volatility) 및 리스크 분석기")
+# 2. 제목 및 설명
+st.title("📈 한국 주식 가격 예측 및 분석 프로그램")
 st.markdown("""
-이 대시보드는 주식의 **과거 변동성과 볼린저 밴드, ATR 지표**를 분석하여 
-조만간 주가가 크게 요동칠 가능성이 있는지(변동성 확대 국면)를 시각적으로 진단해 줍니다.
+이 프로그램은 한국 주식(KOSPI, KOSDAQ) 데이터를 가져와 **선형 회귀 알고리즘**을 통해 향후 주가 추세를 예측합니다.
+* **티커 입력 예시:** 삼성전자(`005930.KS`), SK하이닉스(`000660.KS`), 에코프로비엠(`247540.KQ`)
 """)
 
-# Sidebar
+# 3. 사이드바 설정
 st.sidebar.header("⚙️ 분석 설정")
-ticker = st.sidebar.text_input("종목 티커 입력 (예: 005930.KS, AAPL, TSLA)", value="TSLA")
-period = st.sidebar.selectbox("데이터 조회 기간", ["6mo", "1y", "2y", "5y"], index=1)
+ticker_symbol = st.sidebar.text_input("종목 코드를 입력하세요", value="005930.KS")
 
-if st.sidebar.button("변동성 분석 실행", type="primary"):
-    with st.spinner(f"{ticker} 변동성 데이터를 분석 중입니다..."):
+# 날짜 설정
+today = datetime.today()
+start_date = st.sidebar.date_input("데이터 시작일", today - timedelta(days=365))
+end_date = st.sidebar.date_input("데이터 종료일", today)
+
+# 예측 기간 설정
+pred_days = st.sidebar.slider("AI 예측 기간 (거래일)", 1, 20, 5)
+
+# 4. 분석 실행 버튼
+if st.sidebar.button("주식 데이터 분석 및 예측 실행"):
+    with st.spinner(f"{ticker_symbol} 데이터를 분석 중입니다..."):
         try:
-            # 1. 데이터 수집
-            df = yf.download(ticker, period=period, progress=False)
-            
+            # 데이터 다운로드
+            df = yf.download(ticker_symbol, start=start_date, end=end_date)
+
             if df.empty:
-                st.error("데이터를 가져오지 못했습니다. 티커명을 확인해 주세요.")
+                st.error("데이터를 불러오지 못했습니다. 종목 코드와 날짜를 확인해 주세요.")
             else:
-                # MultiIndex 오류 평탄화 (yfinance 최신버전 대응)
+                # [오류 해결] yfinance MultiIndex 컬럼 평탄화
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                    
-                # 2. 지표 계산
-                # (1) 볼린저 밴드 (20일 기준)
+
+                # 기술적 지표 계산
                 df['MA20'] = df['Close'].rolling(window=20).mean()
-                df['StdDev'] = df['Close'].rolling(window=20).std()
-                df['BB_Upper'] = df['MA20'] + (df['StdDev'] * 2)
-                df['BB_Lower'] = df['MA20'] - (df['StdDev'] * 2)
-                df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 # 밴드폭(%)
+                df['MA50'] = df['Close'].rolling(window=50).mean()
+
+                # 현재 상태 지표
+                latest_close = float(df['Close'].iloc[-1])
+                prev_close = float(df['Close'].iloc[-2])
+                price_diff = latest_close - prev_close
+                pct_change = (price_diff / prev_close) * 100
+
+                # 5. 상단 지표 요약 (Metric)
+                col1, col2, col3 = st.columns(3)
                 
-                # (2) 역사적 변동성 (Historical Volatility, 20일 기준 연율화)
-                df['Daily_Return'] = df['Close'].pct_change()
-                df['HV'] = df['Daily_Return'].rolling(window=20).std() * np.sqrt(252) * 100
+                currency = "원" if (".KS" in ticker_symbol or ".KQ" in ticker_symbol) else "$"
                 
-                # (3) ATR (Average True Range, 14일 기준) - 하루 평균 움직임 폭
-                df['High-Low'] = df['High'] - df['Low']
-                df['High-PrevClose'] = np.abs(df['High'] - df['Close'].shift(1))
-                df['Low-PrevClose'] = np.abs(df['Low'] - df['Close'].shift(1))
-                df['TR'] = df[['High-Low', 'High-PrevClose', 'Low-PrevClose']].max(axis=1)
-                df['ATR'] = df['TR'].rolling(window=14).mean()
+                col1.metric("현재가", f"{int(latest_close):,}{currency}", f"{price_diff:+,} ({pct_change:+.2f}%)")
                 
-                # 결측치 제거
-                df = df.dropna()
+                # --- AI 예측 로직 (선형 회귀) ---
+                recent_30 = df['Close'].tail(30).values
+                x = np.arange(len(recent_30))
+                slope, intercept = np.polyfit(x, recent_30, 1) # 기울기와 절편 계산
                 
-                # 3. 최신 데이터 추출
-                latest = df.iloc[-1]
-                prev = df.iloc[-2]
+                # 미래 가격 계산
+                future_x = np.arange(len(recent_30), len(recent_30) + pred_days)
+                future_preds = slope * future_x + intercept
+                final_pred = future_preds[-1]
                 
-                current_price = float(latest['Close'])
-                current_hv = float(latest['HV'])
-                current_bb_width = float(latest['BB_Width'])
-                current_atr = float(latest['ATR'])
+                pred_diff = final_pred - latest_close
+                pred_pct = (pred_diff / latest_close) * 100
                 
-                currency_symbol = "원" if ".KS" in ticker or ".KQ" in ticker else "$"
-                format_price = lambda x: f"{int(x):,}{currency_symbol}" if currency_symbol == "원" else f"${x:,.2f}"
+                col2.metric(f"{pred_days}일 뒤 예측가", f"{int(final_pred):,}{currency}", 
+                           f"{pred_diff:+,} ({pred_pct:+.2f}%)", delta_color="normal" if pred_diff > 0 else "inverse")
                 
-                # 4. 상단 요약 매트릭스
-                st.subheader(f"📊 {ticker} 현재 변동성 진단")
+                col3.metric("데이터 수집량", f"{len(df)}일분")
+
+                # 6. 차트 시각화
+                st.subheader(f"📊 {ticker_symbol} 주가 추이 및 AI 예측")
                 
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("현재 종가", format_price(current_price))
-                col2.metric("역사적 변동성 (HV)", f"{current_hv:.1f}%", 
-                            help="연간 기준으로 환산한 주가 수익률의 표준편차입니다. 30% 이상이면 고변동성 종목으로 분류됩니다.")
+                # 미래 날짜 생성 (주말 제외)
+                last_date = df.index[-1]
+                future_dates = pd.bdate_range(start=last_date + timedelta(days=1), periods=pred_days)
                 
-                # 볼린저 밴드 폭 변화량 계산
-                bb_width_change = current_bb_width - float(prev['BB_Width'])
-                col3.metric("볼린저 밴드 폭 (수축/확장)", f"{current_bb_width:.1f}%", delta=f"{bb_width_change:+.1f}%", delta_color="off",
-                            help="밴드 폭이 좁아질수록 에너지가 응축되어 조만간 큰 변동이 발생할 확률이 높습니다.")
+                # 시각화용 데이터프레임 구성
+                history = df['Close'].tail(100)
+                forecast = pd.Series(future_preds, index=future_dates)
                 
-                col4.metric("하루 평균 변동폭 (ATR)", format_price(current_atr),
-                            help="최근 14일 동안 하루 평균 주가가 고점과 저점 사이에서 얼마만큼 움직였는지 나타냅니다.")
+                # 예측 시작점을 실제 종가와 연결
+                forecast = pd.concat([pd.Series([latest_close], index=[last_date]), forecast])
                 
-                # 5. AI 변동성 코멘트
-                st.markdown("### 💡 변동성 시그널 분석")
-                if current_bb_width < df['BB_Width'].quantile(0.2):
-                    st.warning("**⚠️ 볼린저 밴드 수축(Squeeze) 상태:** 밴드 폭이 과거 1년 중 하위 20% 이내로 매우 좁습니다. 에너지가 응축되어 있어 조만간 위든 아래든 **급격한 주가 변동이 발생할 가능성이 매우 높습니다.** 방향성 이탈을 주의 깊게 살피세요.")
-                elif current_bb_width > df['BB_Width'].quantile(0.8):
-                    st.info("**📈 볼린저 밴드 확장 상태:** 주가 변동성이 이미 크게 확대된 상태입니다. 단기 고점이나 저점을 형성한 후 다시 안정화(평균 회귀)될 가능성이 있습니다.")
-                else:
-                    st.success("**✅ 정상 변동성 구간:** 주가가 일반적인 변동성 범위 내에서 안정적으로 움직이고 있습니다.")
+                plot_df = pd.DataFrame({
+                    '실제 주가': history,
+                    'AI 예측선': forecast
+                })
                 
-                # 6. 인터랙티브 차트 (Plotly)
-                st.subheader("📈 주가 및 볼린저 밴드 차트")
-                
-                fig = go.Figure()
-                
-                # 캔들스틱 차트
-                fig.add_trace(go.Candlestick(x=df.index,
-                                open=df['Open'], high=df['High'],
-                                low=df['Low'], close=df['Close'],
-                                name='캔들스틱'))
-                
-                # 볼린저 밴드 영역
-                fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='rgba(250, 0, 0, 0.2)'), name='Upper Band'))
-                fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='rgba(0, 0, 250, 0.2)'), fill='tonexty', name='Lower Band'))
-                fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='20일 이평선'))
-                
-                fig.update_layout(xaxis_rangeslider_visible=False, height=500, template='plotly_dark')
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # 하단 차트: 역사적 변동성 트렌드
-                st.subheader("📉 역사적 변동성(HV) 흐름")
-                st.line_chart(df['HV'], height=200)
+                st.line_chart(plot_df)
+
+                # 7. 상세 데이터 표
+                st.subheader("📋 상세 데이터 (최근 10일)")
+                st.dataframe(df[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20']].tail(10).style.format("{:,.0f}"))
 
         except Exception as e:
-            st.error(f"분석 중 오류 발생: {e}")
+            st.error(f"오류가 발생했습니다: {e}")
 else:
-    st.info("← 사이드바에서 티커를 입력하고 버튼을 클릭하세요.")
+    st.info("왼쪽 사이드바에서 종목 코드를 입력하고 버튼을 눌러주세요. (예: 삼성전자 005930.KS)")
