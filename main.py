@@ -5,8 +5,6 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-df = yf.download(ticker, start=start_date, end=end_date)
-
 # Page config
 st.set_page_config(
     page_title="AI 종목별 주식 예측 대시보드",
@@ -48,8 +46,8 @@ if st.sidebar.button("종목별 데이터 분석 및 예측 실행") and tickers
             
             with st.spinner(f"{ticker} 데이터를 불러오는 중..."):
                 try:
-                    # Fetch data
-                    df = tf.download(ticker, start=start_date, end=end_date)
+                    # Fetch data using corrected yf object
+                    df = yf.download(ticker, start=start_date, end=end_date)
                     
                     if df.empty:
                         st.error(f"{ticker} 데이터를 가져오지 못했습니다. 티커명을 확인해 주세요.")
@@ -107,8 +105,6 @@ if st.sidebar.button("종목별 데이터 분석 및 예측 실행") and tickers
                     last_date = df.index[-1]
                     future_dates = [last_date + timedelta(days=x) for x in range(1, pred_days + 1)]
                     
-                    # Custom plotting using Streamlit Line Chart via DataFrame
-                    # For a production app, plotly provides smoother interactive charts
                     history_series = df['Close'].tail(90)
                     forecast_series = pd.Series(future_predictions, index=future_dates)
                     
