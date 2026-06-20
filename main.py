@@ -1,4 +1,4 @@
-                    
+                                   
                     m2.metric(
                         label=f"AI {pred_days}일 뒤 예상 종가", 
                         value=pred_val_format, 
@@ -34,4 +34,3 @@
                     st.error(f"{ticker} 분석 중 오류 발생: {e}")
 else:
     st.info("← 왼쪽 사이드바에서 분석을 원하는 종목 티커들을 입력하고 버튼을 클릭하세요. (예: AAPL, TSLA, 005930.KS)")
-  
